@@ -1,0 +1,101 @@
+# Gloom OWNER HANDOFF INPUT -- proposed schema, not an implemented app config yet.
+# Copy to owner.local.toml (gitignored) or an access-restricted file outside Git.
+# Fill identifiers and choices; put credentials in the execution secret facility.
+# Empty identifiers are deliberate. Preflight must reject missing live inputs.
+# The implementation agent must support/validate this schema or provide a migration.
+
+schema_version = 1
+
+[owner]
+# For local setup reporting only; not a public profile.
+display_name = ""
+timezone = "Europe/Berlin"
+
+[execution]
+# local_windows is recommended for real capture/audio validation.
+# Other option: remote_with_windows_ci; interactive tests remain separate.
+mode = "local_windows"
+interactive_windows_test_available = false
+# Optional factual hardware/device notes, never credentials.
+windows_test_notes = ""
+
+[cloudflare]
+account_id = ""
+zone_id = ""
+zone_name = ""
+production_hostname = ""
+# Optional; without this, test production Cache API behavior later on production.
+development_hostname = ""
+# Record the ACTUAL subscription, not permission for an agent to change it.
+workers_plan = "free" # free | paid
+
+[cloudflare.development]
+worker_name = "gloom-dev"
+r2_bucket = "gloom-media-dev"
+d1_name = "gloom-dev"
+# Fill only if an existing D1 database has already been deliberately provisioned.
+d1_id = ""
+r2_jurisdiction = "eu" # must match the already-created bucket
+
+[cloudflare.production]
+worker_name = "gloom-prod"
+r2_bucket = "gloom-media-prod"
+d1_name = "gloom-prod"
+d1_id = ""
+r2_jurisdiction = "eu"
+
+[deployment]
+# Set true only to authorize live changes to the named Gloom resources.
+live_deployment_authorized = false
+# Add production only when its credentials/hostname and deployment are authorized.
+allowed_environments = ["development"]
+# The agent may create the named D1 databases/Workers and configure Gloom buckets.
+# It may not change billing, registrar/nameservers, or unrelated resources.
+resource_prefix = "gloom"
+monthly_soft_budget_usd = 10.0 # planning/alert target, NOT a provider hard cap
+allow_new_paid_products = false
+# Proposed application storage guardrail to implement, not an existing cloud cap.
+new_upload_storage_soft_limit_gb = 100
+
+[local]
+# Fill real absolute paths. Leave empty to require the first-run chooser.
+recordings_directory = ""
+independent_backup_directory = ""
+keep_running_in_tray = false
+
+[recording]
+default_destination = "gloom" # gloom | local_only
+# by_link means anyone possessing the secret link can view; not student enrollment.
+default_access = "by_link" # by_link | owner_only
+system_audio_default = false
+microphone_default = true
+preferred_microphone = "" # select/test during Windows setup when empty
+preferred_capture_target = ""
+initial_height = 1080
+initial_fps = 30
+segment_target_seconds = 6
+# Quality must be measured with code text; no mandatory 3 Mbps encoding target.
+
+[retention]
+automatic_deletion_enabled = false
+ordinary_recording_expiry_days = 0 # zero means no expiry
+permanent_course_expiry_days = 0
+temporary_recording_offer_days = 30 # offered policy, not automatically enabled
+r2_cleanup_after_youtube_switch_enabled = false
+r2_cleanup_grace_days = 7
+require_independent_backup_before_master_cleanup = true
+
+[youtube]
+# Optional integration: these may remain false/empty for a complete R2-first app.
+enabled_for_live_setup = false
+allow_live_test_upload = false
+# Recording/course tags must not silently enable export.
+default_export_enabled = false
+expected_channel_id = ""
+google_project_id = ""
+# File PATH only; alternatively set YOUTUBE_OAUTH_CLIENT_FILE securely.
+oauth_client_file = ""
+oauth_publishing_status = "not_configured" # testing | production | not_configured
+api_publication_capability = "not_checked" # validated | blocked | not_checked
+approval_interface = "youtube_studio"
+automatic_playback_backend_switch = false
