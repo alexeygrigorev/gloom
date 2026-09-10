@@ -1,0 +1,52 @@
+# Local configuration and secrets. Example files remain tracked.
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+config/*.local.toml
+config/*.local.json
+config/*.local.yaml
+secrets/
+.secrets/
+client_secret*.json
+*oauth-client*.local.json
+
+# Local application/deployment state and private diagnostics.
+.local/
+.gloom/
+.wrangler/
+deployment.local.*
+deployment-inventory.local.*
+owner-status.local.*
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+
+# Recordings/artifacts must not be committed as test fixtures accidentally.
+recordings/
+media-local/
+*.mp4
+*.mkv
+*.webm
+*.m4s
+*.aac
+*.wav
+
+# Build outputs and caches; commit application dependency lockfiles.
+node_modules/
+target/
+dist/
+build/
+coverage/
+test-results/
+playwright-report/
+*.msi
+*.exe
+*.pdb
+.DS_Store
+Thumbs.db
