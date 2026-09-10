@@ -1,334 +1,293 @@
 # Gloom: product and technical specification
 
-**Version:** 0.1  
+**Version:** 0.2  
 **Date:** 2026-09-10  
-**Status:** Proposed implementation specification; not implemented or validated on the owner's machine.
+**Status:** Implementation requirements, not implemented or validated behavior.
 
-## 1. Purpose and priorities
+## 1. Product decision and precedence
 
-Gloom is a personal Windows recording tool, not a commercial Loom competitor. It should make recording course lessons and short explanations predictable, keep an independently recoverable local copy, and remove unnecessary publishing work.
+Gloom is a personal, Windows-first Loom replacement. **Gloom-hosted recording and sharing is the primary path: local recording -> Cloudflare R2 -> Gloom's player and stable share link. YouTube is an optional, explicitly selected export destination.**
 
-The central workflow is **record locally, automatically upload privately to YouTube, review later, then explicitly release the video**. YouTube should host and deliver most approved recordings. Gloom should not pay to store and distribute the same video by default.
+This revision supersedes the earlier YouTube-first specification. In particular, it restores concurrent uploads and near-immediate sharing to the core scope. YouTube credentials, upload capability, API audits, and availability must never be dependencies of ordinary recording or Gloom playback.
 
-Priorities, in order:
+The owner should be able to use Gloom indefinitely without connecting Google. Some recordings remain on Gloom only. Others, especially course material, can be exported to YouTube privately, approved later, and optionally served through YouTube instead of R2.
 
-1. Never silently lose a recording or publish an unapproved recording.
-2. Make recording and recovery simple and dependable.
-3. Automate private uploads while keeping publication under the owner's control.
-4. Minimize implementation complexity and recurring infrastructure costs.
-5. Add alternative hosting only for a demonstrated need.
+Priorities: preserve recordings; make the Record/Stop/share workflow reliable and simple; minimize recurring costs; keep destinations under explicit owner control; avoid building a multi-user commercial product.
 
 ### 1.1 Confirmed requirements
 
-The owner uses Windows, records course material and informal clips, wants independently selectable system audio, values a simple recording workflow, and prefers minimal/serverless infrastructure. Rust is desirable but is not a reason to rewrite working capture or encoding software. Some recordings must remain available long-term; others may expire or be deleted. Most recordings should upload automatically to YouTube, with manual approval later.
+Windows recording, screen/window capture, microphone capture, independently optional system audio, durable local copies, upload during recording, working links soon after Stop, global playback, permanent and temporary recordings, and inexpensive serverless hosting. Rust is preferred where useful. YouTube export must upload privately and require manual approval for publication.
 
-### 1.2 Proposed defaults
+### 1.2 Proposed implementation defaults
 
-These are design choices, not additional requirements attributed to the owner:
-
-| Decision | Initial choice |
+| Concern | Default |
 | --- | --- |
-| Platform | Windows 11 x64 first; validate other Windows versions separately |
-| Recording engine | Existing OBS installation controlled by a small Rust application |
-| Persistent application state | Local SQLite database and a managed recordings directory |
-| Destination | YouTube, uploaded directly from the desktop |
-| Upload privacy | Always private for the automatic-upload workflow |
-| Approval interface | YouTube Studio in the system browser |
-| Intended course visibility | Suggest unlisted at review; never apply it automatically |
-| System audio | Off unless explicitly enabled for that recording |
-| Cloud infrastructure | None required for the MVP |
-| R2 | Deferred, optional backup or alternative-hosting adapter |
+| Desktop | Rust coordinator and a small Tauri UI; Windows x64 first |
+| Capture engine | Reuse an established engine if it passes the concurrent-output proof; do not require a custom codec implementation |
+| Cloud | Cloudflare R2 Standard, one Worker with static assets, one D1 metadata database per environment |
+| Playback | An established open-source HLS player, such as Video.js; no paid player service |
+| Media preparation | Local encoding/packaging, one tested 1080p/30 fps rendition initially |
+| Upload | Completed short segments uploaded directly to R2 with bounded, short-lived upload authorization |
+| R2 visibility | Private buckets; all viewer access goes through the authorized Worker path |
+| Sharing | Revocable anyone-with-the-link sharing, with an owner-only option |
+| YouTube | Disconnected/off by default; explicit Save to YouTube action |
+| System audio | Off by default, independent of microphone selection |
+| Retention | No automatic deletion until a policy is explicitly enabled |
+| Infrastructure | No AWS, VM, container host, cloud transcoder, Cloudflare Stream, or hosted database server |
 
-## 2. The first feasibility gate: YouTube publication
+These are proposed technical choices, not claims that the owner selected a UI framework, Windows version, bitrate, or particular capture dependency. The agent may change implementation details with a short decision record, but must not demote R2 sharing or remove concurrent upload to make implementation easier.
 
-An API project audit is a dependency, not an implementation detail to leave until release. New unaudited API projects can produce videos that are locked private. YouTube documents that those uploads cannot simply be changed to public/unlisted in Studio; its supported recovery is re-uploading through its official site/app or a verified API service. The service can also seek an API audit. [S1][S2]
+## 2. Recording and destination behavior
 
-Before relying on this architecture for student-facing videos, test a disposable recording against the actual Google project and channel. Record whether the project supports publication after a private API upload. Do not assume that OAuth consent-screen verification, a channel's longer-upload verification, and the YouTube API compliance audit are interchangeable approvals.
-
-Gloom must offer two explicitly labeled modes:
-
-- **Automatic private upload:** the desired workflow, with publication dependent on the validated project capability.
-- **Manual YouTube upload:** retain/export the completed file, open the official upload interface, and allow the owner to attach the resulting video URL. This works as a fallback workflow but is not advertised as automatic upload.
-
-Do not build browser automation, cookie extraction, or private/undocumented upload endpoints to evade the gate. If publication is blocked, explain it and preserve the file. Do not automatically pay for or publish to R2 instead.
-
-## 3. Scope
-
-### 3.1 MVP
-
-Provide screen or window capture, microphone selection, optional system audio, start/stop controls and a hotkey, a local recording library, file import, private resumable uploads, visible upload status, retry/recovery, review in Studio, link copying after approval, and separate local/remote deletion controls.
-
-No camera overlay is required initially. The system must support importing an existing recording so the upload workflow can be tested before the custom recorder UI exists.
-
-### 3.2 Not in the MVP
-
-No team accounts, billing, public signup, video editor, AI summaries, transcription pipeline, analytics warehouse, mobile/macOS/Linux capture, cloud transcoding, live broadcasting, DRM, enrollment synchronization, or custom video-streaming player.
-
-A branded share domain, YouTube playlists, in-app publication, camera overlays, and R2-hosted instant sharing are later features. Do not provision AWS, Cloudflare, or a hosted database merely to begin development.
-
-## 4. End-to-end experience
-
-### 4.1 Setup
-
-The owner selects a recordings directory, checks OBS connectivity, chooses a microphone, connects the intended YouTube channel, reviews upload metadata defaults, and explicitly enables automatic private uploading. The chosen channel name and identity must remain visible in settings and the upload queue.
-
-Automatic upload is disabled until consent is established. Once enabled, it is the default for ordinary recordings, with a prominent per-recording **Local only** override. Private upload still sends the content to Google before human review; the UI must make that distinction clear.
-
-### 4.2 Record and stop
-
-Before Record, show the capture target, microphone input meter, system-audio toggle, destination policy, and free disk space. During capture, show an unmistakable recording indicator and elapsed time.
-
-On Stop, commit the recording to the local library, finalize/remux it when needed, and enqueue a validated file automatically. No browser tab, cloud connection, metadata form, or approval prompt should be needed to save the recording.
-
-### 4.3 Review later
-
-The library separates local recordings, active uploads, private recordings awaiting review, published recordings, and failures requiring attention. Each item offers local preview, title/description editing where applicable, Open in Studio, retry/pause/cancel, and destination information.
-
-In the MVP, the owner reviews the video and metadata in Studio, selects the desired visibility there, and saves. Gloom refreshes remote status and records an observed external publication as the manual approval action. It must not rewrite Studio edits with stale local metadata.
-
-Unlisted means anyone with the link can view and forward it; it is not enrollment-based protection. The review screen must explain this. Public is an explicit alternative, never the automatic outcome of finishing an upload. [S3]
-
-### 4.4 What ready means
-
-| Milestone | Meaning |
-| --- | --- |
-| Saved locally | A durable local recording exists; finalization/recovery may still be running |
-| Local preview ready | The completed or recovered file can be reviewed locally |
-| Uploaded | YouTube accepted the file and Gloom has persisted its video ID |
-| Processed | Provider processing succeeded; final playback quality still needs validation |
-| Awaiting review | The uploaded item remains private and has not been released |
-| Ready to share | Approval is recorded and the intended remote visibility/availability is verified |
-
-**Proposed MVP trade-off:** the earlier desire for an immediately working link on Stop becomes an immediately saved local recording plus automatic publication preparation. Upload and processing are asynchronous operations performed by the running app/provider, not an instant remote-playback promise. A private video URL is not a student-ready link.
-
-The MVP uploads a finalized file after Stop. Concurrent upload of an unfinished recording and live-to-VOD tricks are deliberately deferred. For illustration, 1.35 GB takes about 18 minutes over a 10 Mbps uplink before overhead and provider processing. This is a calculation, not a latency estimate for the owner's connection.
-
-## 5. Recording requirements
-
-**REC-01 — Capture controls.** Support one selected display or window, start/stop from the application and a configurable hotkey, and visible capture state. Region capture is optional after the first usable version.
-
-**REC-02 — Audio consent.** Provide independent microphone and system-audio controls. System audio starts off for each new recording unless the owner has explicitly configured a different recording profile. Do not silently substitute a different microphone when the selected device disappears.
-
-**REC-03 — Recoverable output.** Write to disk during capture. The initial OBS implementation should use a recoverable recording container, such as MKV, and remux to the upload format afterward when required. OBS recommends MKV to avoid losing the entire recording on an ungraceful stop. [S4]
-
-**REC-04 — Quality.** Begin testing with 1080p, 30 fps, hardware H.264 encoding where available, and AAC audio in the upload MP4. These are proposed starting settings, not a fixed bitrate promise. Validate small code text, scrolling, cursor motion, and audio synchronization after YouTube processing. Preserve a configurable higher-quality preset.
-
-**REC-05 — Local processing.** Reuse the existing encoder; avoid a second lossy encode when a remux is sufficient. Never stream the entire recording into application memory. A capture master and derived upload file must have distinct lifecycle records.
-
-**REC-06 — Failures.** Low disk, device loss, capture failure, sleep, and application interruption must leave visible state and any recoverable bytes. A recovered/incomplete recording requires review before being automatically uploaded.
-
-**REC-07 — Process lifecycle.** Closing the main window may minimize to the tray after an explicit preference is set. Exiting the uploader or sleeping/shutting down the PC pauses local upload work; it resumes on the next launch. Do not imply that a remote server keeps uploading when the PC is off.
-
-## 6. Architecture
+### 2.1 Primary workflow
 
 ```text
-Windows desktop
-  Minimal UI / tray / hotkeys
-          |
-     Rust coordinator
-       /     |       \
- Capture   Library   Persistent upload worker
- adapter   SQLite          |
-    |         |       Google OAuth tokens in OS secret storage
-   OBS        |            |
-    |         |       Direct resumable upload to YouTube
- Recoverable local file    |
-    |                      v
- Local remux/validation   YouTube processing
-    |                      |
- Upload-ready file      Private review in Studio
-                           |
-                      Manual publication
-                           |
-                    Direct YouTube link
-                    Optional future embed page
+Select screen/window, microphone, and optional system audio
+  -> Record to recoverable local storage
+  -> Produce and upload completed playback segments while recording
+  -> Stop and commit the remaining segments/manifest
+  -> Copy a stable Gloom link
+  -> Viewer opens the Gloom player; media is served from R2 through Cloudflare
 ```
 
-OBS already exposes WebSocket-based remote control; Gloom should use that rather than invent an inter-process control protocol. Keep the control connection local and authenticated. [S5]
+After the owner's initial setup consent, Gloom hosting is enabled for normal recordings. No repeated hosting approval dialog is required. The destination indicator remains visible. Local only disables all cloud upload for that recording. Owner only permits R2 storage but withholds viewer access.
 
-Recommended module boundaries are `capture`, `media`, `library`, `jobs`, `youtube`, `secrets`, and `ui`. Capture and destination adapters should be replaceable, but no general plugin framework is required. An OBS dependency is acceptable for a personal tool; evaluate native Windows capture only if it demonstrably improves the everyday workflow.
+A share link may be allocated at recording start, but before completion it must show an honest not-ready state. No public live broadcast is implied. Do not expose an in-progress lesson merely because a URL exists.
 
-SQLite is the source of truth for local workflow state. Files use stable recording IDs, not titles, as identifiers. The UI must remain responsive while recording, hashing, remuxing, or uploading. A single-instance/job-lease mechanism prevents two processes from uploading the same queued revision.
+### 2.2 Secondary workflow
 
-## 7. YouTube integration
+```text
+An existing recording -> Save to YouTube
+  -> Confirm destination channel and private upload metadata
+  -> Persistent background upload performed by the running desktop app
+  -> YouTube processing -> Awaiting YouTube approval
+  -> Owner reviews/releases it in YouTube Studio
+  -> Gloom observes the approved visibility
+  -> Optional, separate Use YouTube for this Gloom link action
+```
 
-### 7.1 Authentication and consent
+Pressing Save to YouTube authorizes transfer to Google, not public/unlisted publication. A per-recording Also upload privately to YouTube choice may be selected before recording for convenience; it defaults off. A course tag alone must never enable it. A reusable course preset requires explicit opt-in and must show that destination before capture.
 
-Use a Desktop OAuth client, the system browser, a supported loopback redirect, state validation, and PKCE. Keep access/refresh tokens in Windows-protected secret storage rather than source files or the public repository. Request offline access where supported and handle revoked/expired credentials through reauthorization. An installed-app client credential is not a substitute for protecting the owner's tokens. [S6]
+No implicit YouTube requests, synchronization, or export jobs may run for Gloom-only/local-only items. Account connection, restarting, retries, and editing a title are not export consent.
 
-Start with `youtube.upload` for uploads and the read permission needed to inspect the owner's channel and private video status, such as `youtube.readonly`; validate the exact scope set in the feasibility test. Studio-based approval avoids requesting publication/delete permissions in the first version. Add broader permissions only for explicit later features, using the relevant method's current requirements. [S1][S7]
+### 2.3 Three independent decisions
 
-Surface the destination, title, description, and privacy choices, and let the owner disable an upload destination. Validate the integration against YouTube's required minimum functionality rather than assuming a personal application has no platform obligations. [S8]
+| Decision | Example | What it must NOT imply |
+| --- | --- | --- |
+| Where copies exist | Local plus R2, optionally a YouTube copy | Permission to publish the YouTube copy |
+| What the share page plays | R2 by default; approved YouTube asset after explicit switch | Permission to delete R2 or the master |
+| What may be deleted | Explicit local/R2 retention policy | Deletion from another destination |
 
-### 7.2 Upload operation
+Export completion never changes the existing Gloom link, its access mode, or its playback backend. A private or policy-blocked YouTube video must not replace a functioning R2 video.
 
-**UP-01.** Only enqueue a completed, validated file revision whose upload policy permits YouTube. Freeze its size and content fingerprint for the job.
+## 3. Meaning of ready and measurable targets
 
-**UP-02.** Use the documented resumable protocol. Persist the session reference securely; query the provider for the acknowledged offset after interruptions rather than trusting the number of bytes the client attempted to send. Respect protocol chunk alignment and retry behavior. [S9]
+Distinct states must be visible: recording, saved locally, finishing upload, Gloom ready, export queued/uploading, YouTube processing, awaiting approval, approved, and needs attention. YouTube status is a secondary badge, not the main recording state.
 
-**UP-03.** Set `status.privacyStatus=private` explicitly and `notifySubscribers=false` on the initial upload. Do not set `publishAt` or enqueue a delayed visibility change. Owner-confirmed audience and other applicable disclosure settings belong in the metadata profile. [S1]
+**Primary readiness:** the local recording is recoverable, all referenced media exists remotely, the final playlist is committed, and an authorized viewer can start playback and seek. A URL pointing to a spinner or a partially missing playlist is not ready.
 
-**UP-04.** Record the video ID transactionally when the provider confirms completion. Never create a second upload just because the client lost the final response. Reconcile the resumable session first; if the outcome cannot be determined, stop in `completion_unknown` for owner-assisted resolution.
+Upload during capture is mandatory for the intended low-latency workflow. Uploading a single completed multi-GB MP4 after Stop is acceptable for file import/recovery, but does not satisfy normal recording acceptance.
 
-**UP-05.** Use bounded retries with exponential backoff and jitter. Distinguish network/transient failures from authentication, quota, policy, metadata, and local-file failures. Retryable jobs survive application and machine restarts.
+**Proposed target to validate:** Stop-to-playable-Gloom-link <=10 seconds in ten consecutive representative recordings, with a healthy connection, no upload backlog at Stop, and sustained uplink at least twice the measured average encoding rate. Report the actual hardware, codec, duration, bitrate, network conditions, and measured times. This is an acceptance target, not an achieved guarantee.
 
-**UP-06.** One concurrent upload is the default. Provide pause/resume, cancel, progress, and an optional bandwidth limit. Capture takes priority over remux/upload work.
+Offline or insufficient-bandwidth recording must remain safe. Show remaining upload work and resume later; never promise instant remote playback under those conditions. Closing the app, sleep, or PC shutdown can stop local upload work. Tray operation is opt-in and visible; there is no always-running remote uploader.
 
-**UP-07.** Poll only tracked video IDs for provider status, with backoff and a manual refresh action. The owner-authorized `videos.list` endpoint exposes processing information; do not substitute unauthenticated scraping. [S7]
+## 4. Capture and local media pipeline
 
-**UP-08.** Cancellation stops further transfer but is not a promise that YouTube has deleted a partially or fully created asset. Show known remote state and provide a Studio link.
+### 4.1 Required controls and output
 
-### 7.3 Quotas and channel capability
+Provide display/window selection, a microphone meter, independent microphone/system-audio toggles, Record/Stop, elapsed time, and a configurable hotkey. Show the actual destination and recording indicator. Do not silently switch microphones after device loss. Camera overlay, region capture, and editing are deferred.
 
-At the review date, YouTube documents separate default daily buckets of 100 upload calls and 100 search calls, plus 10,000 units for other endpoints; quotas reset at midnight Pacific Time. Treat the actual project's console as authoritative and keep limits configurable. Do not copy older per-upload quota estimates into the implementation. [S10]
+Use hardware encoding where available and preserve readable code text, cursor motion, and synchronized audio. Start testing with H.264 video and AAC audio, but choose quality from real recordings rather than enforcing a universal 3 Mbps bitrate. One HLS rendition does not provide adaptive quality; a lower-bitrate rendition is a later, optional local-encoding improvement.
 
-Pause on quota exhaustion and explain when retry will be attempted. Do not create extra projects to bypass quotas. Avoid `search.list` for routine polling.
+Produce a recoverable local master or an equivalently recoverable complete local segment set throughout capture. Do not rely on finalizing ordinary MP4 as the only protection against process failure. A reusable capture engine such as OBS and an established packager such as FFmpeg are preferred over writing codecs. OBS exposes remote control, and FFmpeg supports HLS/fMP4 packaging. [R1][R2]
 
-Validate that the channel can upload recordings longer than 15 minutes. YouTube documents an upper limit of 256 GB or 12 hours, whichever comes first; longer-upload eligibility is a separate setup check. [S11]
+### 4.2 Mandatory engine proof
 
-## 8. Approval and publication safety
+Before polishing the UI, prove that the selected Windows capture path can simultaneously preserve recoverable local media and emit completed, timestamp-correct, keyframe-aligned segments while capture is still running.
 
-**PUB-01.** Upload completion, successful processing, a retry, a timer, restarting the application, and reconnecting OAuth must never approve or publish a video.
+**OBS WebSocket start/stop plus a watcher that waits for the final file is not sufficient.** Do not assume that remuxing/tailing a growing file works reliably without testing EOF behavior, buffering, discontinuities, restarts, and audio/video timestamps. If the OBS integration cannot meet the contract simply, use another supported capture/output adapter and document the decision. Keep Rust coordination and the user workflow stable.
 
-**PUB-02.** Review decisions refer to a specific recording revision and remote video ID. Replacing/re-uploading media invalidates approval for the new asset.
+Suggested packaging is approximately six-second independently addressable HLS segments. Emit temporary files first and atomically mark them complete so the uploader cannot read half-written segments. Use bounded memory and keep capture ahead of upload/remux work. The exact segment duration is adjustable based on tests and request cost.
 
-**PUB-03.** MVP approval occurs in Studio. Store the observed visibility and the time it was refreshed. Gloom may recognize the owner's external change to unlisted/public as approval, but a successful upload alone is not evidence of review.
+### 4.3 Local recovery and import
 
-**PUB-04.** Only enable the normal Copy share link action after the intended visibility is observed. Provide a separately labeled private-owner/Studio link while review is pending. Warn that actual playback and course embedding should be checked before distributing a lesson.
+Persist the recording, artifact inventory, and retry queue in local SQLite. Use recording ID plus content revision as identifiers, not filenames/titles. Hash and validate completed artifacts. Keep each upload source unchanged while its job exists.
 
-**PUB-05.** `provider_blocked` is distinct from `pending_review`. Do not infer a locked-private reason merely because ordinary private visibility is observed. Use setup validation, documented errors, and owner confirmation where the API does not expose a definitive reason.
+On restart, reconcile unfinished captures and jobs. Recovered/incomplete recordings require owner review before sharing. Support importing existing files through the same packaging and upload pipeline. Derive a standalone upload MP4 locally for YouTube only when needed; avoid an unnecessary lossy re-encode.
 
-**PUB-06.** Keep-private and reject are non-publication outcomes. Reject does not automatically delete the original or a remote asset. Deletion requires its own action.
+## 5. Serverless architecture
 
-**PUB-07.** Future in-app publication must require an explicit confirmation showing the exact video, title, channel, and target visibility. It must not bypass the feasibility gate. Remote updates must preserve unrelated metadata and be verified after completion.
+```text
+Windows recorder (Rust + UI + capture adapter)
+  |-- recoverable originals/segments + local SQLite queue
+  |-- small authenticated requests --> Gloom Worker API
+  |                                  |-- D1 metadata/state
+  |                                  |-- issue scoped upload URLs
+  |-- completed segments --------------------------> private R2
+  |
+  `-- explicitly selected export ------------------> YouTube
 
-## 9. Persistent model and state
+Viewer --> Worker custom domain --> static share page/player
+                  |
+                  |-- validate share capability / playback authorization
+                  |-- serve authorized manifest and media from edge cache
+                  `-- cache miss --> private R2 binding
+```
 
-Use separate state dimensions rather than one overloaded `ready` flag.
+Use one origin for the share page/API/media initially to simplify browser behavior. Development and production have separate buckets, databases, credentials, and resource names. The agent must generate repeatable provisioning, bindings, migrations, deployment, and rollback scripts rather than leave a list of dashboard operations for the owner.
 
-| Entity | Essential fields |
+D1 stores small authoritative remote metadata, not video bytes. It is serverless and has included usage on Workers plans. Local SQLite remains the durable source for local jobs; remote state must not depend on the PC remaining online after upload. [R3]
+
+Workers should authorize and stream, not encode long recordings or buffer complete videos. Upload bytes normally go directly from desktop to R2. Runtime access uses Worker secrets/bindings; deployment credentials never ship in the desktop installer or website.
+
+## 6. Upload and finalization contract
+
+An initial API surface, subject to sensible implementation refinements:
+
+| Operation | Required semantics |
 | --- | --- |
-| Recording | ID, creation time, title, description, course/tag, content revision, capture state, duration, resolution, audio configuration, destination-policy snapshot, retention class |
-| Local artifact | Recording/revision, role (master/upload/thumbnail), path, size, checksum, finalization state, existence/validation time |
-| Upload job | ID, recording/revision, destination/channel, state, protected session reference, acknowledged offset, attempt count, next retry time, remote ID, structured last error |
-| Remote asset | Recording/revision, provider/video ID, upload status, processing status, observed visibility, embeddability when available, last verified time, setup/policy gate state |
-| Review event | Recording/revision, remote ID, decision, intended visibility, time, provenance (Studio observation or explicit Gloom action) |
-| Backup record | Artifact/revision, destination, checksum verification, completion time, last restore test |
+| Create recording | Owner-authenticated, idempotent create with content revision, access mode, retention, and policy snapshot |
+| Authorize segment batch | Bound to this recording/revision, specific keys, allowed types, sizes, and short expiration |
+| Acknowledge segment batch | Verify remote existence/length and supported integrity evidence; record acknowledged inventory idempotently |
+| Complete revision | Verify complete inventory and manifest references, then atomically mark ready; safe to retry |
+| Update metadata/access | Owner-authenticated; optimistic concurrency and no implicit destination changes |
+| Create/rotate/revoke share | Separate from upload; reject unauthorized access immediately at session creation |
+| Issue playback session | Validate capability/access/ready state, return narrowly scoped expiring playback authorization |
+| Select playback backend | Require explicit owner choice and verified eligible YouTube asset when switching away from R2 |
+| Schedule deletion | Record explicit scope; protect references, pending jobs, backups, and grace periods |
 
-Suggested capture states: `recording`, `finalizing`, `local_ready`, `interrupted`, `failed`.
+Use immutable, revisioned media paths and cryptographically random share capabilities. Validate paths against the known recording namespace; no arbitrary object-key signing, arbitrary URLs, or unauthenticated uploads. Rate-limit mutation endpoints, constrain job/segment counts and expected bytes, and reject malformed/oversized input.
 
-Suggested upload states: `queued`, `uploading`, `paused`, `retry_wait`, `auth_required`, `quota_wait`, `completion_unknown`, `uploaded`, `failed`, `cancelled`, `manual_upload_required`.
+R2 S3 presigned URLs use the S3 endpoint, not the Worker/custom domain. Their expiration and object scope must be tested. Browser CORS is relevant only to browser-origin S3 access; it is not authorization and does not replace private-bucket controls. [R4]
 
-Keep provider processing (`unknown`, `pending`, `succeeded`, `failed`) separate from review (`pending`, `approved`, `kept_private`, `rejected`) and actual visibility (`private`, `unlisted`, `public`, `unknown`). A local approval never overrides the provider's actual visibility.
+Persist acknowledgements while recording. Batch remote verification so Stop does not trigger thousands of sequential requests or exceed Worker subrequest limits. Confirm finalization with explicit state rather than inferring success from a client timeout. Checksums must use a tested provider-supported mechanism; do not assume an ETag is a SHA-256 checksum.
 
-State transitions must be persisted before dependent jobs run. On startup, scan unfinished jobs and incomplete local artifacts, reconcile them, and display recovery actions. An immutable file revision and one active upload job per revision/channel are local deduplication rules, not an exactly-once guarantee from the remote API.
+Retry transient failures with bounded exponential backoff and jitter. Expired upload URLs should be renewed only for still-authorized jobs. Restart recovery must avoid duplicate recording creation. A cancelled or abandoned revision is not automatically shared; later cleanup must account for outstanding URL lifetimes.
 
-## 10. Distribution and course integration
+## 7. Playback, cache, and access
 
-The cheapest MVP copies the approved YouTube URL into the course manually. Gloom must not depend on a Maven API, student database, or automated enrollment synchronization.
+### 7.1 Private origin and caching
 
-A later branded share page can map a stable Gloom ID to an approved provider ID. For YouTube content, use YouTube's supported embedded player, not extracted media URLs or a player that removes its controls/branding. Follow the embed requirements and include a direct Watch on YouTube fallback. [S12]
+Keep R2 public access and `r2.dev` disabled. Attach the production hostname to the Worker, **not directly to the protected bucket**. Use the Worker R2 binding and Cache API for media delivery. The R2 Cache API example requires a custom domain/route; `workers.dev` is suitable for development but not proof of this production caching behavior. [R5][R6]
 
-The public mapping may expose only approved publication metadata. Do not deploy a JSON catalog containing private video IDs, titles, review notes, or local paths. Updates to a stable link must not unexpectedly replace course content without owner confirmation.
+Authorization must run before returning any cached media. Cache immutable bytes under canonical internal keys after validation; do not globally cache the entire authorization response or let another cache layer bypass access checks. Never cache user-specific metadata, credentials, or signed manifests as shared public responses. Test both cache hits and misses with missing, expired, and revoked credentials.
 
-Unlisted YouTube does not meet a strict enrolled-students-only requirement. Such content must use another explicitly selected destination/access model. Private does not mean end-to-end encrypted: YouTube explains that its systems and reviewers may inspect private videos. [S3]
+Use appropriate content types, lengths, cache directives, and range handling. Implement explicit diagnostics for cache hits in the development test path rather than assuming one particular response header proves the cache implementation. Demonstrate a same-location hit that avoids an R2 read. Global caching is on demand, not permanent replication of every file to every location.
 
-Test playback from the actual student environments. No design can promise that YouTube is reachable on every network. R2 or another host is an opt-in alternative, not a silent fallback that redistributes content.
+### 7.2 Access modes
 
-## 11. Retention and backup
+**Anyone with the link** is the simple default, not enrollment-based security. The link contains a high-entropy capability separate from the recording ID. Prefer a fragment-carried capability exchanged by the share-page JavaScript so it is not included in ordinary server request URLs/referrers. The backend stores capability hashes; the desktop protects recoverable link material or offers rotation when it cannot recover an existing link.
 
-| Classification | Default behavior |
+**Owner only** disables viewer sessions and remains usable for owner preview. **Local only** means no R2 or YouTube transfer. These names must not be conflated.
+
+Suggested playback-session lifetime is ten minutes, scoped to one recording/revision. Session refresh checks current share/access state; media requests validate signatures/expiration before cache access. Revocation prevents new sessions immediately and expires existing access within the documented session lifetime plus clock skew. It cannot erase bytes already downloaded. Test token refresh during multi-hour playback and seeking.
+
+The agent must explicitly propagate playback authorization to every playlist/init/segment resource; a query string on a master playlist is not automatically inherited by its children. Test native Safari HLS as well as the JavaScript player path. Do not require students to install software.
+
+Protect private metadata from unauthenticated enumeration. Use no-referrer, noindex, a restrictive content-security policy, and no unnecessary third-party scripts on R2 share pages. These are defense-in-depth, not substitutes for authorization.
+
+### 7.3 Player functionality
+
+Use a maintained player rather than implementing demuxing/decoding. Include play/pause, seeking, volume, playback speed, full screen, responsive layout, a useful error/retry state, title, local resume position, and timestamp sharing. Do not add a mandatory paid video service. Verify Chrome/Edge/Firefox on desktop and Safari/mobile playback with actual encoded test media. [R7]
+
+## 8. YouTube export: optional, implemented separately
+
+### 8.1 Consent and authentication
+
+Gloom launches and records normally with no Google configuration. Save to YouTube prompts connection only when selected. Show the channel, video revision, metadata, and private-transfer intent. A disabled/unconfigured integration is a valid primary-product installation, not an onboarding failure.
+
+Use a Desktop OAuth client, system browser, loopback redirect, PKCE, state validation, and OS-protected tokens. Request the minimum upload/read scopes required; start by validating `youtube.upload` and `youtube.readonly`. Never use an ordinary service account for a personal channel. Keep Google refresh tokens on the desktop, not in R2 metadata, Worker configuration, CI artifacts, or Git. [R8]
+
+### 8.2 Upload and review
+
+Upload directly from a finalized local artifact with the documented resumable protocol. R2 is not used as an unnecessary staging hop. If only Gloom-hosted segments remain, reconstruct a valid upload artifact through the owner's authorized download path; never extract media from YouTube. Persist provider-confirmed offsets and video IDs. If the final response is lost, reconcile the session before retrying; use `completion_unknown` rather than automatically creating a duplicate. [R9]
+
+Always create exports as private with subscriber notifications disabled. No timer, successful upload, app restart, course tag, or processing completion may publish the video. Review occurs in YouTube Studio initially; Gloom refreshes observed status without overwriting Studio edits. Approval is bound to the specific remote video and content revision. [R10]
+
+A manual decision to publish in Studio and an observed eligible visibility can mark the export approved. Public/unlisted visibility must be verified before enabling Use YouTube for this link. Unlisted links are forwardable, not enrollment restrictions. YouTube's embedded player must be used for YouTube-backed playback. [R11][R12]
+
+### 8.3 Provider gates do not block Gloom
+
+Unaudited API-project uploads may be locked private. Manual visibility changes in Studio do not bypass that lock; the documented fallback is upload through the official YouTube site/app or a verified API service, or pursue an API audit. Record the actual project's tested capability. Do not label a locked-private asset as merely waiting for a publication toggle. [R10][R13]
+
+OAuth consent verification, OAuth publishing/testing state, channel longer-upload eligibility, and YouTube API audit are separate concerns. External OAuth projects in Testing can issue seven-day refresh tokens for these scopes. Handle reauthorization and explain the setup state; changing OAuth to production is not proof of API audit approval. [R14]
+
+Confirm the actual channel's longer-upload eligibility and the project's current quotas at setup. Use configurable retry/quota handling rather than embedding remembered quota numbers. Test a disposable export with explicit owner permission; automated CI must not upload to the real channel.
+
+## 9. Playback migration and retention
+
+The stable Gloom URL initially resolves to R2 playback. After YouTube approval, an explicit Use YouTube for this link action may change the backend without changing the URL. Keep the prior mapping for rollback and do not switch owner-only material to forwardable YouTube access without an explicit access-policy confirmation.
+
+Show R2 copy retained after a backend switch. Removing it is a separate opt-in action after a grace period, a playback check, and preservation of an independent recoverable master for permanent lessons. Keeping both copies costs R2 storage; YouTube saves delivery requests only when the link actually plays YouTube. Do not silently fall back to another host after access changes or deletion.
+
+| Category | Initial retention behavior |
 | --- | --- |
-| Permanent course material | No automatic deletion; retain an independent recoverable copy and publication mapping |
-| Ordinary recording | Keep the original until the owner explicitly enables a cleanup policy |
-| Temporary clip | Offer an explicit 30- or 90-day policy, with a Keep override |
-| Failed/incomplete capture | Retain for recovery; cleanup only after review or a separately enabled policy |
-| Derived upload file | May be removed after successful upload/validation if an independently usable master remains |
+| Permanent course material | No automatic expiry; independent recoverable copy required before source cleanup |
+| Ordinary recording | Keep until explicitly deleted or a policy is enabled |
+| Temporary recording | Offer 30/90-day expiry and Keep override; no hidden default deletion |
+| Interrupted/failed capture | Retain for review/recovery |
+| Abandoned uploaded segments | Reconcile first; scheduled cleanup with a documented safe grace period |
+| Derived export MP4 | Removable after success when a usable master remains |
 
-Uploading to YouTube does not satisfy Gloom's independent-backup requirement. Before enabling automatic original cleanup, require a verified second copy, such as an external drive or optional private object storage. Backup is not the same as public hosting.
+Separate local deletion, Gloom/R2 deletion, link revocation, and YouTube deletion. Remote YouTube deletion remains a Studio operation initially. Revoking a Gloom URL does not revoke a separately distributed YouTube URL. A YouTube copy is not an independent original-file backup.
 
-Protect pending uploads, ambiguous completion states, unpublished course masters, and failed backups from automated cleanup. Show a dry-run deletion list and separate Delete local copy from Delete on YouTube. Remote deletion remains a Studio action in the MVP.
+Do not use archive/infrequent-access tiers for the only playable copy. Defer archive-tier automation until measured storage savings justify it. Retention jobs must be idempotent and protect in-flight jobs, permanent material, and assets still referenced by active playback mappings.
 
-A temporary local expiration must not imply that a published YouTube video has expired. Provider deletion/access changes have separate policies and confirmations. Display broken or missing remote assets without deleting the remaining source.
+## 10. Persistence, security, and operations
 
-Do not implement infrequent-access/archive tiers initially. Reconsider them only after measured storage costs justify the recovery complexity.
+Persist recording IDs/revisions, policy snapshots, artifact roles/checksums, upload acknowledgements, desired versus observed remote state, primary playback backend, hashed share capabilities, export consent, review provenance, retention class, and backup verification. Keep capture, R2 readiness, YouTube upload, YouTube visibility, approval, and deletion as separate state dimensions.
 
-## 12. Optional R2 extension
+The desktop owner credential is a high-entropy, revocable application credential generated during setup and stored with OS protection. The Worker stores its verifier and server-side signing keys as secrets. Do not use the Cloudflare deployment API token as the application's runtime login. No public signup or exposed unauthenticated administrative UI is required.
 
-R2 is not part of the default upload path. Never upload every recording to R2 just to copy it to YouTube.
+Restrict desktop IPC and local control to necessary capabilities; authenticate OBS control and bind it locally. Never interpolate user metadata into shell commands. Validate filenames and render titles as text. Log structured states/errors without tokens, presigned URLs, private titles, or secret-bearing request bodies. Telemetry is off by default.
 
-Two distinct later uses are allowed:
+Provide database migrations, configuration validation, sanitized diagnostics, usage estimates, resource inventory export, credential rotation, deployment rollback, and a tested restore/export path. Never delete data during a deployment rollback. Immutable originals should survive an application upgrade. Cloud resource names must distinguish development from production.
 
-**Private backup.** Store selected original files privately, optionally encrypted before upload. No CDN/player is required. Backup failure must not prevent a local recording or completed YouTube upload from existing.
+## 11. Operating costs and budget discipline
 
-**Alternative sharing.** For explicitly selected non-YouTube clips, add a player, authorization where required, local media preparation, and caching configuration. Keep backups and shareable media separate. Validate cache limits, CORS, content types, and seeking before choosing MP4 versus segmented HLS.
+Planning assumptions, USD before tax, checked 2026-09-10:
 
-The earlier near-instant sharing idea belongs here: produce playable segments and upload completed segments during capture. It is a separate engineering milestone with its own readiness/approval rules. It must not be smuggled into the YouTube MVP as a required HLS pipeline.
+- R2 Standard storage is $0.015/GB-month after 10 GB-month of free storage. It includes monthly operation allowances and has no egress charge. [R15]
+- Workers Paid starts at $5/month with included requests and CPU; Free can be used for development but has daily limits. Static assets and D1 have their own included allowances. Cache hits in this authenticated design still require the chosen authorization/request path. [R3][R16]
+- At an illustrative 3 Mbps, 30 recorded hours is about 40.5 GB (`hours * Mbps * 0.45`). That is approximately $0.50/month of R2 storage before extra renditions/backups and operation overages. With a $5 Worker plan, a $6-10/month initial planning budget is reasonable at modest usage, not a fixed-price or unlimited-service promise.
 
-## 13. Operating-cost model
+Primary traffic is R2-hosted unless an owner switches the playback backend. Count stored copies, segment requests, database queries, CPU, logs, and retries. Track development plus production against shared account allowances. Do not create another paid subscription, cloud transcoder, streaming product, or third-party service without authorization.
 
-These are architecture budgets, not provider guarantees. USD before tax; development time, electricity, connectivity, disk purchases, code signing, domains, and independent backups are excluded unless selected.
+Budget alerts and configuration limits are not a guaranteed billing hard cap. Any application upload/storage limits must be described precisely; playback request charges and abusive traffic still need monitoring. Do not delete lessons automatically to enforce a cost target.
 
-| Configuration | Estimated incremental Gloom cloud hosting |
-| --- | --- |
-| Desktop + direct YouTube uploads + direct YouTube links | Target $0/month: no Gloom-managed cloud component |
-| Optional static YouTube embed/share site | Can fit free static hosting; domain and dynamic functions are separate |
-| Optional 40.5 GB private R2 backup | Approximately $0.50/month storage with unused free allowance; operations extra beyond allowances |
-| Optional 100 GB private R2 backup | Approximately $1.35/month storage on the same assumptions |
-| Optional authenticated R2 video delivery | Separate future budget; not required for YouTube-hosted viewing |
+## 12. Release acceptance
 
-The R2 examples use Standard storage at $0.015/GB-month after 10 GB-month free. R2 includes 1 million write-class and 10 million read-class operations monthly; egress has no charge, but connected metered services can add costs. Billing rounds usage units. [S13]
+The implementation is not complete until evidence covers:
 
-Cloudflare Workers Static Assets currently serves static requests without storage/request charges; dynamic Worker execution is priced separately. This is an optional share-page host, not a reason to introduce a backend. [S14]
+1. With no Google credentials, a real Windows recording becomes a playable Gloom link; service-only recordings produce no Google network calls or export jobs.
+2. Completed segments demonstrably reach R2 during capture, and the readiness target in section 3 is tested rather than replaced with upload-after-Stop behavior.
+3. Microphone-only, microphone plus system audio, and silent recording behave as selected. Multi-hour recordings preserve readable text, synchronization, and seeking.
+4. Network interruption, restart, disk-full/device-loss scenarios, expired upload authorization, and ambiguous completion preserve recoverable state and avoid silent duplication.
+5. Unauthorized metadata/manifest/segment access fails, including on cache hits. A custom-domain cache test avoids redundant R2 reads. Revocation and long-video token refresh meet their documented bounds.
+6. Save to YouTube exports only the selected revision privately; approval and backend switching are separate. A blocked export leaves the existing Gloom recording usable.
+7. Local/R2/YouTube deletion and expiry are independent. Cleanup cannot remove the only permanent-course copy or an active upload source.
+8. The agent delivers a Windows build, deployed service when authorized, repeatable setup/deploy scripts, tests, resource inventory, usage notes, and exact remaining owner actions. Mock-only tests are not labeled real Windows/provider validation.
 
-The 40.5 GB example comes from 30 recorded hours at an assumed average 3 Mbps: `hours * Mbps * 0.45 = decimal GB`. Actual masters may be much larger. YouTube handles delivery in the default design, so student viewing does not generate Gloom CDN traffic. Quotas, account restrictions, policy changes, and access requirements still matter.
+Detailed sequencing and owner prerequisites are in [implementation-plan.md](implementation-plan.md), [preparation.md](preparation.md), and [agent-handoff.md](agent-handoff.md).
 
-## 14. Security and operational requirements
+## References
 
-No credentials, tokens, resumable-session URLs, recording media, private metadata, or local databases belong in the public repository. Provide sanitized configuration examples and ignore local state. Tests use synthetic media and mocked HTTP responses, not real account secrets.
+Primary sources checked 2026-09-10; recheck during implementation. Architecture, defaults, safety limits, and acceptance targets above are proposed Gloom design choices.
 
-Bind local control endpoints to loopback, authenticate OBS control, restrict filesystem access to configured locations, sanitize filenames, and render titles/descriptions as text rather than HTML. Do not execute shell commands constructed from metadata.
-
-Logs should contain IDs, state transitions, error categories, and timings, but redact credentials and private URLs. A diagnostics export must be previewable. Telemetry is off by default.
-
-Expose actionable failures: disk full, source disappeared, connection offline, reauthorization needed, quota exhausted, upload completion uncertain, processing failed, and publication blocked. Prefer recoverable state over automatic deletion or re-upload.
-
-Keep migrations reversible where practical, back up the library database before upgrades, and export recording/provider mappings in a documented format. Review dependency and external-platform changes before release. Re-audit bundled software licensing before distributing binaries beyond the owner's machine.
-
-## 15. Acceptance criteria
-
-The first personal release is acceptable only when:
-
-- A real recording succeeds with microphone only, with microphone plus system audio, and with both disabled; system audio never appears when off.
-- Screen and window selection, a long coding lesson, small text, cursor motion, and audio synchronization pass review on the owner's hardware and in YouTube playback.
-- Stop creates a durable local record without a network connection or publication prompt.
-- Every automatic upload starts private and cannot become public/unlisted from queue completion, retries, or application restart.
-- Offline recording and interrupted uploads survive application restart; uploads resume or enter an explicit recoverable state.
-- A lost final upload response does not cause an automatic duplicate upload.
-- Manual approval and observed remote visibility apply to the correct content revision and channel.
-- A policy-locked upload is not presented as an ordinary pending-review item that a visibility toggle will fix.
-- A publication/audit-blocked installation still has a functioning local recorder and clearly labeled official manual-upload fallback.
-- The library distinguishes saved, uploading, processing, review-pending, and shareable recordings.
-- Original cleanup cannot remove the only recoverable course copy or an in-flight upload source.
-- No cloud account other than the chosen YouTube integration is required for the default workflow, and no credentials appear in logs or Git.
-
-Targets for startup speed, stop-to-local-preview latency, and audio drift should be set from measured prototype results. Do not describe untested targets as achieved reliability.
-
-## 16. References and change control
-
-Primary sources checked on 2026-09-10. External prices, quotas, and platform rules are snapshots; recheck them during the feasibility milestone. Product requirements above are proposed design decisions unless explicitly identified as platform constraints.
-
-- **S1:** [YouTube videos.insert: upload, authorization, privacy, notifications, and audit restriction](https://developers.google.com/youtube/v3/docs/videos/insert)
-- **S2:** [YouTube: videos locked as private and supported recovery](https://support.google.com/youtube/answer/7300965?hl=en)
-- **S3:** [YouTube: private, unlisted, and public visibility](https://support.google.com/youtube/answer/157177?hl=en)
-- **S4:** [OBS: standard recording output and recoverable container recommendation](https://obsproject.com/kb/standard-recording-output-guide)
-- **S5:** [OBS: remote control guide](https://obsproject.com/kb/remote-control-guide)
-- **S6:** [Google: OAuth for desktop applications](https://developers.google.com/identity/protocols/oauth2/native-app)
-- **S7:** [YouTube videos.list: owner-authorized status and processing inspection](https://developers.google.com/youtube/v3/docs/videos/list)
-- **S8:** [YouTube API required minimum functionality](https://developers.google.com/youtube/terms/required-minimum-functionality)
-- **S9:** [YouTube resumable upload protocol](https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol)
-- **S10:** [YouTube current quota buckets and method costs](https://developers.google.com/youtube/v3/determine_quota_cost)
-- **S11:** [YouTube: longer uploads, verification, and size/duration limits](https://support.google.com/youtube/answer/71673?hl=en)
-- **S12:** [YouTube supported embedded player](https://developers.google.com/youtube/iframe_api_reference)
-- **S13:** [Cloudflare R2 pricing and billing allowances](https://developers.cloudflare.com/r2/pricing/)
-- **S14:** [Cloudflare Workers Static Assets billing](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/)
+- **R1:** [OBS remote control](https://obsproject.com/kb/remote-control-guide)
+- **R2:** [FFmpeg formats and HLS packaging](https://ffmpeg.org/ffmpeg-formats.html)
+- **R3:** [Cloudflare D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)
+- **R4:** [R2 presigned URLs](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)
+- **R5:** [R2 with the Workers Cache API](https://developers.cloudflare.com/r2/examples/cache-api/)
+- **R6:** [Worker custom domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+- **R7:** [Video.js](https://videojs.com/)
+- **R8:** [Desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app)
+- **R9:** [YouTube resumable uploads](https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol)
+- **R10:** [YouTube videos.insert](https://developers.google.com/youtube/v3/docs/videos/insert)
+- **R11:** [YouTube visibility](https://support.google.com/youtube/answer/157177?hl=en)
+- **R12:** [YouTube embedded player](https://developers.google.com/youtube/iframe_api_reference)
+- **R13:** [YouTube locked-private uploads](https://support.google.com/youtube/answer/7300965?hl=en)
+- **R14:** [Google OAuth token expiration](https://developers.google.com/identity/protocols/oauth2)
+- **R15:** [R2 pricing](https://developers.cloudflare.com/r2/pricing/)
+- **R16:** [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
